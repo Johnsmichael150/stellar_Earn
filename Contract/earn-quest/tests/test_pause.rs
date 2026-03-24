@@ -11,6 +11,7 @@ mod pause_tests {
     use super::*;
 
     /// Helper to setup test environment
+    #[allow(dead_code)]
     fn setup_env() -> (Env, Address) {
         let env = Env::default();
         let admin = Address::generate(&env);
