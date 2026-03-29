@@ -5,16 +5,21 @@ import type { QuestWizardData } from "@/lib/schemas/quest.schema";
 interface VerificationSettingsStepProps {
   data: QuestWizardData;
   errors: Record<string, string>;
+  verifierAddress?: string | null;
+  onConnectWallet: () => void;
   onChange: (next: QuestWizardData["verification"]) => void;
 }
 
 const VerificationSettingsStep = ({
   data,
   errors,
+  verifierAddress,
+  onConnectWallet,
   onChange,
 }: VerificationSettingsStepProps) => {
   const hasInstructionsError = Boolean(errors["verification.instructions"]);
   const hasAutoCriteriaError = Boolean(errors["verification.autoCriteria"]);
+  const hasVerifierError = Boolean(errors["verification.verifierAddress"]);
 
   return (
     <section className="space-y-5" data-testid="step-verification">
@@ -106,6 +111,40 @@ const VerificationSettingsStep = ({
           )}
         </label>
       )}
+
+      <div
+        className={`rounded-2xl border p-4 ${
+          hasVerifierError
+            ? "border-red-300 bg-red-50 dark:border-red-900 dark:bg-red-950/30"
+            : "border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900"
+        }`}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+              Verifier Address
+            </p>
+            <p className="mt-1 break-all text-xs text-zinc-500 dark:text-zinc-400">
+              {verifierAddress ||
+                "No verifier address detected yet. Connect a wallet or sign in to publish."}
+            </p>
+          </div>
+          {!verifierAddress && (
+            <button
+              type="button"
+              onClick={onConnectWallet}
+              className="rounded-xl bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700"
+            >
+              Connect Wallet
+            </button>
+          )}
+        </div>
+        {errors["verification.verifierAddress"] && (
+          <p className="mt-2 text-xs text-red-600">
+            {errors["verification.verifierAddress"]}
+          </p>
+        )}
+      </div>
     </section>
   );
 };

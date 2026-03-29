@@ -1,15 +1,22 @@
 "use client";
 
 import type { QuestWizardData } from "@/lib/schemas/quest.schema";
-import { extractPlainTextFromHtml } from "@/lib/schemas/quest.schema";
+import {
+  extractPlainTextFromHtml,
+  formatWizardDateTime,
+} from "@/lib/schemas/quest.schema";
 
 interface QuestPreviewProps {
   data: QuestWizardData;
+  verifierAddress?: string | null;
 }
 
-const QuestPreview = ({ data }: QuestPreviewProps) => {
+const QuestPreview = ({ data, verifierAddress }: QuestPreviewProps) => {
   const hasDescription = Boolean(
     extractPlainTextFromHtml(data.basics.description),
+  );
+  const milestones = data.timeline.milestones.filter(
+    (item) => item.title.trim() || item.dueDate.trim(),
   );
 
   return (
@@ -70,10 +77,10 @@ const QuestPreview = ({ data }: QuestPreviewProps) => {
             <p className="text-xs text-zinc-500 dark:text-zinc-400">Deadline</p>
             <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
               {data.timeline.deadline
-                ? new Date(data.timeline.deadline).toLocaleString(undefined, {
-                    dateStyle: "medium",
-                    timeStyle: "short",
-                  })
+                ? formatWizardDateTime(
+                    data.timeline.deadline,
+                    data.timeline.timezone,
+                  )
                 : "Not set"}
             </p>
             <p className="text-xs text-zinc-500 dark:text-zinc-400">
@@ -121,6 +128,62 @@ const QuestPreview = ({ data }: QuestPreviewProps) => {
                 item.title.trim(),
               ).length === 0 && <li>No deliverables listed.</li>}
             </ul>
+          </div>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <h4 className="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+              Milestones
+            </h4>
+            <ul className="mt-2 space-y-2 text-sm text-zinc-700 dark:text-zinc-200">
+              {milestones.map((item) => (
+                <li
+                  key={item.id}
+                  className="rounded-lg border border-zinc-200 p-2 dark:border-zinc-700"
+                >
+                  <p className="font-medium">{item.title || "Untitled milestone"}</p>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                    {item.dueDate
+                      ? `${formatWizardDateTime(item.dueDate, data.timeline.timezone)} (${data.timeline.timezone})`
+                      : "Due date not set"}
+                  </p>
+                </li>
+              ))}
+              {milestones.length === 0 && <li>No milestones listed.</li>}
+            </ul>
+          </div>
+
+          <div>
+            <h4 className="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+              Verification
+            </h4>
+            <div className="mt-2 space-y-3 text-sm text-zinc-700 dark:text-zinc-200">
+              <div className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
+                <p className="font-medium">
+                  {data.verification.mode === "auto"
+                    ? "Auto Verification"
+                    : "Manual Review"}
+                </p>
+                <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                  {data.verification.instructions || "No instructions provided."}
+                </p>
+              </div>
+              {data.verification.mode === "auto" && (
+                <div className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
+                  <p className="font-medium">Automation Criteria</p>
+                  <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                    {data.verification.autoCriteria || "No criteria provided."}
+                  </p>
+                </div>
+              )}
+              <div className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
+                <p className="font-medium">Verifier Address</p>
+                <p className="mt-1 break-all text-xs text-zinc-500 dark:text-zinc-400">
+                  {verifierAddress || "Connect a wallet or sign in to assign a verifier address."}
+                </p>
+              </div>
+            </div>
           </div>
         </div>
       </section>

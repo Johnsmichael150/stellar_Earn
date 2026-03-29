@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CheckCircle2 } from "lucide-react";
+import { CheckCircle2, Wallet } from "lucide-react";
 import DraftManager from "@/components/quest/DraftManager";
 import QuestBasicsStep from "@/components/quest/steps/QuestBasicsStep";
 import RequirementsCriteriaStep from "@/components/quest/steps/RequirementsCriteriaStep";
@@ -11,46 +11,82 @@ import TimelineStep from "@/components/quest/steps/TimelineStep";
 import VerificationSettingsStep from "@/components/quest/steps/VerificationSettingsStep";
 import ReviewPreviewStep from "@/components/quest/steps/ReviewPreviewStep";
 import ConfirmationStep from "@/components/quest/steps/ConfirmationStep";
-import type { QuestFormData } from "@/lib/types/admin";
-import { useCreateQuest } from "@/lib/hooks/useAdmin";
+import { useWallet } from "@/context/WalletContext";
+import { useQuestCreation } from "@/lib/hooks/useQuestCreation";
 import { useQuestDraft } from "@/lib/hooks/useQuestDraft";
 import {
   defaultQuestWizardData,
   QUEST_WIZARD_STEPS,
+  formatWizardDateTime,
   sanitizeWizardData,
   validateStep,
+  zonedDateTimeToIso,
   type QuestWizardData,
   type QuestWizardStepIndex,
 } from "@/lib/schemas/quest.schema";
+import type { CreateQuestRequest } from "@/lib/types/api.types";
 
-function toQuestFormData(data: QuestWizardData): QuestFormData {
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function toQuestCreatePayload(
+  data: QuestWizardData,
+  verifierAddress: string,
+): CreateQuestRequest {
   const deadline = data.timeline.deadline
-    ? data.timeline.timezone === "UTC"
-      ? new Date(`${data.timeline.deadline}:00Z`).toISOString()
-      : new Date(data.timeline.deadline).toISOString()
-    : "";
+    ? zonedDateTimeToIso(data.timeline.deadline, data.timeline.timezone)
+    : null;
+
+  const milestoneItems = data.timeline.milestones.filter(
+    (item) => item.title.trim() && item.dueDate.trim(),
+  );
+
+  const verificationSections = [
+    `<section><h2>Quest Summary</h2><p>${escapeHtml(data.basics.shortDescription)}</p></section>`,
+    `<section><h2>Verification Settings</h2><p><strong>Mode:</strong> ${escapeHtml(
+      data.verification.mode === "auto" ? "Auto Verification" : "Manual Review",
+    )}</p><p>${escapeHtml(data.verification.instructions)}</p></section>`,
+    data.verification.mode === "auto" && data.verification.autoCriteria
+      ? `<section><h3>Automation Criteria</h3><p>${escapeHtml(data.verification.autoCriteria)}</p></section>`
+      : "",
+    `<section><h2>Timeline</h2><p><strong>Deadline:</strong> ${escapeHtml(
+      data.timeline.deadline
+        ? `${formatWizardDateTime(data.timeline.deadline, data.timeline.timezone)} (${data.timeline.timezone})`
+        : "Not set",
+    )}</p></section>`,
+  ];
+
+  if (milestoneItems.length > 0) {
+    verificationSections.push(
+      `<section><h3>Milestones</h3><ul>${milestoneItems
+        .map(
+          (item) =>
+            `<li><strong>${escapeHtml(item.title)}</strong>: ${escapeHtml(
+              `${formatWizardDateTime(item.dueDate, data.timeline.timezone)} (${data.timeline.timezone})`,
+            )}</li>`,
+        )
+        .join("")}</ul></section>`,
+    );
+  }
 
   return {
     title: data.basics.title,
-    shortDescription: data.basics.shortDescription,
-    description: [
-      data.basics.description,
-      "",
-      "## Verification Instructions",
-      data.verification.instructions,
-      data.verification.mode === "auto"
-        ? `\nAuto Criteria:\n${data.verification.autoCriteria}`
-        : "",
-      "",
-      `Timezone: ${data.timeline.timezone}`,
-    ]
+    description: [data.basics.description, ...verificationSections]
       .filter(Boolean)
-      .join("\n"),
+      .join(""),
     category: data.basics.category,
     difficulty: "intermediate",
-    reward: data.reward.amount,
+    rewardAsset: data.reward.assetType,
+    rewardAmount: data.reward.amount,
     xpReward: data.reward.xpReward,
-    deadline,
+    verifierAddress,
+    deadline: deadline ?? undefined,
     maxParticipants: 200,
     requirements: [
       ...data.requirements.skills.map((skill) => `Skill: ${skill}`),
@@ -58,17 +94,12 @@ function toQuestFormData(data: QuestWizardData): QuestFormData {
         (item) =>
           `Deliverable: ${item.title}${item.details ? ` (${item.details})` : ""}${item.required ? " [required]" : ""}`,
       ),
-      ...data.timeline.milestones
-        .filter((item) => item.title)
-        .map(
-          (item) =>
-            `Milestone: ${item.title}${item.dueDate ? ` by ${item.dueDate}` : ""}`,
-        ),
     ],
     tags: [
       "wizard-created",
       `asset-${data.reward.assetType.toLowerCase()}`,
       `verification-${data.verification.mode}`,
+      `timezone-${data.timeline.timezone.toLowerCase().replaceAll("/", "-")}`,
     ],
   };
 }
@@ -82,13 +113,31 @@ function parseErrors(errorList: Array<{ field: string; message: string }>) {
 
 const QuestWizard = () => {
   const router = useRouter();
-  const { create, isCreating } = useCreateQuest();
+  const { create, isCreating, verifierAddress } = useQuestCreation();
+  const { openModal } = useWallet();
 
   const [wizardData, setWizardData] = useState(defaultQuestWizardData);
   const [stepIndex, setStepIndex] = useState<QuestWizardStepIndex>(0);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
+
+  const getStepErrors = (
+    currentStep: QuestWizardStepIndex,
+    data: QuestWizardData,
+  ) => {
+    const errors = [...validateStep(currentStep, data)];
+
+    if ((currentStep === 4 || currentStep === 5) && !verifierAddress) {
+      errors.push({
+        field: "verification.verifierAddress",
+        message:
+          "Connect a wallet or sign in so the quest can be assigned to a verifier address.",
+      });
+    }
+
+    return errors;
+  };
 
   const { saveDraft, loadDraft, clearDraft, draftMeta } = useQuestDraft(
     wizardData,
@@ -101,17 +150,21 @@ const QuestWizard = () => {
   );
 
   const validateCurrent = () => {
-    const errors = validateStep(stepIndex, wizardData);
+    const errors = getStepErrors(stepIndex, wizardData);
     setFieldErrors(parseErrors(errors));
     return errors.length === 0;
   };
+
+  useEffect(() => {
+    setFieldErrors(parseErrors(getStepErrors(stepIndex, wizardData)));
+  }, [stepIndex, verifierAddress, wizardData]);
 
   const applyStepUpdate = (
     updater: (prev: QuestWizardData) => QuestWizardData,
   ) => {
     setWizardData((prev) => {
       const next = updater(prev);
-      const nextErrors = validateStep(stepIndex, next);
+      const nextErrors = getStepErrors(stepIndex, next);
       setFieldErrors(parseErrors(nextErrors));
       return next;
     });
@@ -123,7 +176,24 @@ const QuestWizard = () => {
     }
 
     if (stepIndex === 5) {
-      const payload = toQuestFormData(sanitizeWizardData(wizardData));
+      if (!verifierAddress) {
+        setFieldErrors(
+          parseErrors([
+            {
+              field: "verification.verifierAddress",
+              message:
+                "Connect a wallet or sign in so the quest can be assigned to a verifier address.",
+            },
+          ]),
+        );
+        setStepIndex(4);
+        return;
+      }
+
+      const payload = toQuestCreatePayload(
+        sanitizeWizardData(wizardData),
+        verifierAddress,
+      );
       const result = await create(payload);
       if (!result.success) {
         setSubmitError(result.error ?? "Failed to create quest.");
@@ -212,6 +282,8 @@ const QuestWizard = () => {
         <VerificationSettingsStep
           data={wizardData}
           errors={fieldErrors}
+          verifierAddress={verifierAddress}
+          onConnectWallet={openModal}
           onChange={(next) =>
             applyStepUpdate((prev) => ({ ...prev, verification: next }))
           }
@@ -219,7 +291,12 @@ const QuestWizard = () => {
       );
     }
     if (stepIndex === 5) {
-      return <ReviewPreviewStep data={wizardData} />;
+      return (
+        <ReviewPreviewStep
+          data={wizardData}
+          verifierAddress={verifierAddress}
+        />
+      );
     }
     return (
       <ConfirmationStep
@@ -298,6 +375,18 @@ const QuestWizard = () => {
       </div>
 
       <div className="rounded-3xl border border-zinc-200 bg-white p-4 shadow-sm sm:p-6 dark:border-zinc-700 dark:bg-zinc-900">
+        {!verifierAddress && stepIndex >= 4 && stepIndex <= 5 && (
+          <div className="mb-4 flex items-start gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+            <Wallet className="mt-0.5 h-4 w-4 shrink-0" />
+            <div>
+              <p className="font-semibold">Verifier address required</p>
+              <p className="mt-1">
+                Connect a wallet or sign in before publishing so the backend can
+                assign a verifier address to the quest.
+              </p>
+            </div>
+          </div>
+        )}
         {currentStepContent}
       </div>
 

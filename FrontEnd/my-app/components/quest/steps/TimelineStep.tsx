@@ -12,6 +12,7 @@ interface TimelineStepProps {
 
 const TimelineStep = ({ data, errors, onChange }: TimelineStepProps) => {
   const hasDeadlineError = Boolean(errors["timeline.deadline"]);
+  const hasMilestoneError = Boolean(errors["timeline.milestones"]);
 
   const updateMilestone = (
     id: string,
@@ -46,10 +47,6 @@ const TimelineStep = ({ data, errors, onChange }: TimelineStepProps) => {
   };
 
   const removeMilestone = (id: string) => {
-    if (data.timeline.milestones.length === 1) {
-      return;
-    }
-
     onChange({
       ...data.timeline,
       milestones: data.timeline.milestones.filter((item) => item.id !== id),
@@ -102,7 +99,13 @@ const TimelineStep = ({ data, errors, onChange }: TimelineStepProps) => {
         </label>
       </div>
 
-      <div>
+      <div
+        className={
+          hasMilestoneError
+            ? "rounded-2xl border border-red-300/70 p-3 dark:border-red-900/60"
+            : ""
+        }
+      >
         <div className="mb-2 flex items-center justify-between">
           <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
             Milestones
@@ -149,7 +152,18 @@ const TimelineStep = ({ data, errors, onChange }: TimelineStepProps) => {
               </button>
             </div>
           ))}
+          {data.timeline.milestones.length === 0 && (
+            <div className="rounded-xl border border-dashed border-zinc-300 p-4 text-sm text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+              No milestones added yet. Add optional milestones to break the quest
+              into checkpoints.
+            </div>
+          )}
         </div>
+        {errors["timeline.milestones"] && (
+          <p className="mt-2 text-xs text-red-600">
+            {errors["timeline.milestones"]}
+          </p>
+        )}
       </div>
     </section>
   );

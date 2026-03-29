@@ -98,6 +98,149 @@ export interface ValidationError {
   message: string;
 }
 
+interface DateTimeParts {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+}
+
+function parseDateTimeParts(value: string): DateTimeParts | null {
+  const match = value.match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/,
+  );
+
+  if (!match) {
+    return null;
+  }
+
+  const [, year, month, day, hour, minute, second] = match;
+  return {
+    year: Number(year),
+    month: Number(month),
+    day: Number(day),
+    hour: Number(hour),
+    minute: Number(minute),
+    second: Number(second ?? "0"),
+  };
+}
+
+function getFormatter(timezone: string) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+}
+
+export function zonedDateTimeToIso(
+  value: string,
+  timezone: string,
+): string | null {
+  const parts = parseDateTimeParts(value);
+  if (!parts) {
+    return null;
+  }
+
+  if (timezone === "UTC") {
+    return new Date(
+      Date.UTC(
+        parts.year,
+        parts.month - 1,
+        parts.day,
+        parts.hour,
+        parts.minute,
+        parts.second,
+      ),
+    ).toISOString();
+  }
+
+  let formatter: Intl.DateTimeFormat;
+  try {
+    formatter = getFormatter(timezone);
+  } catch {
+    return null;
+  }
+
+  let timestamp = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second,
+  );
+
+  const targetTimestamp = timestamp;
+
+  for (let index = 0; index < 3; index += 1) {
+    const formattedParts = formatter.formatToParts(new Date(timestamp));
+    const current = {
+      year: Number(
+        formattedParts.find((part) => part.type === "year")?.value ?? "0",
+      ),
+      month: Number(
+        formattedParts.find((part) => part.type === "month")?.value ?? "0",
+      ),
+      day: Number(
+        formattedParts.find((part) => part.type === "day")?.value ?? "0",
+      ),
+      hour: Number(
+        formattedParts.find((part) => part.type === "hour")?.value ?? "0",
+      ),
+      minute: Number(
+        formattedParts.find((part) => part.type === "minute")?.value ?? "0",
+      ),
+      second: Number(
+        formattedParts.find((part) => part.type === "second")?.value ?? "0",
+      ),
+    };
+
+    const currentTimestamp = Date.UTC(
+      current.year,
+      current.month - 1,
+      current.day,
+      current.hour,
+      current.minute,
+      current.second,
+    );
+    const diff = targetTimestamp - currentTimestamp;
+
+    if (diff === 0) {
+      break;
+    }
+
+    timestamp += diff;
+  }
+
+  const result = new Date(timestamp);
+  return Number.isNaN(result.getTime()) ? null : result.toISOString();
+}
+
+export function formatWizardDateTime(value: string, timezone: string): string {
+  const isoValue = zonedDateTimeToIso(value, timezone);
+  if (!isoValue) {
+    return value || "Not set";
+  }
+
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone: timezone,
+    }).format(new Date(isoValue));
+  } catch {
+    return new Date(isoValue).toLocaleString();
+  }
+}
+
 export function extractPlainTextFromHtml(value: string): string {
   return value
     .replace(/<br\s*\/?>/gi, " ")
@@ -232,15 +375,66 @@ export function validateStep(
         message: "Deadline is required.",
       });
     } else {
-      const deadlineDate = new Date(data.timeline.deadline);
-      if (
-        Number.isNaN(deadlineDate.getTime()) ||
-        deadlineDate.getTime() <= Date.now()
-      ) {
+      const deadlineIso = zonedDateTimeToIso(
+        data.timeline.deadline,
+        data.timeline.timezone,
+      );
+      if (!deadlineIso || new Date(deadlineIso).getTime() <= Date.now()) {
         errors.push({
           field: "timeline.deadline",
           message: "Deadline must be a future date/time.",
         });
+      }
+
+      const milestoneEntries = data.timeline.milestones.filter(
+        (item) => item.title.trim() || item.dueDate.trim(),
+      );
+
+      for (const milestone of milestoneEntries) {
+        if (!milestone.title.trim()) {
+          errors.push({
+            field: "timeline.milestones",
+            message: "Each milestone needs a title.",
+          });
+          break;
+        }
+
+        if (!milestone.dueDate.trim()) {
+          errors.push({
+            field: "timeline.milestones",
+            message: "Each milestone needs a due date.",
+          });
+          break;
+        }
+
+        const milestoneIso = zonedDateTimeToIso(
+          milestone.dueDate,
+          data.timeline.timezone,
+        );
+
+        if (!milestoneIso) {
+          errors.push({
+            field: "timeline.milestones",
+            message: "Milestone dates must be valid.",
+          });
+          break;
+        }
+
+        if (new Date(milestoneIso).getTime() <= Date.now()) {
+          errors.push({
+            field: "timeline.milestones",
+            message: "Milestones must be scheduled in the future.",
+          });
+          break;
+        }
+
+        if (deadlineIso && milestoneIso > deadlineIso) {
+          errors.push({
+            field: "timeline.milestones",
+            message: "Milestones must be due before the final deadline.",
+          });
+          break;
+        }
       }
     }
   }
