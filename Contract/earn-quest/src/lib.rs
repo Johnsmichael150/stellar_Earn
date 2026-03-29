@@ -3,6 +3,7 @@
 use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, Symbol};
 
 mod admin;
+pub mod dispute;
 pub mod assets;
 mod errors;
 mod escrow;
