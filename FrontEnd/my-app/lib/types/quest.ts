@@ -1,32 +1,27 @@
+import type { QuestResponse, QuestDifficulty as ApiQuestDifficulty, QuestStatus as ApiQuestStatus } from './api.types';
+
 export enum QuestStatus {
-  ACTIVE = 'ACTIVE',
-  PAUSED = 'PAUSED',
-  COMPLETED = 'COMPLETED',
-  EXPIRED = 'EXPIRED',
+  ACTIVE = 'Active',
+  PAUSED = 'Paused',
+  COMPLETED = 'Completed',
+  EXPIRED = 'Expired',
 }
 
 export enum QuestDifficulty {
-  EASY = 'EASY',
-  MEDIUM = 'MEDIUM',
-  HARD = 'HARD',
+  EASY = 'beginner',
+  MEDIUM = 'intermediate',
+  HARD = 'advanced',
 }
 
-export interface Quest {
-  creator: any;
-  skills: any;
+// Align Quest with QuestResponse while keeping it as an interface for backward compatibility
+export interface Quest extends Partial<QuestResponse> {
   id: string;
   title: string;
   description: string;
-  category: string; // Security, Frontend, Backend, Docs, Testing, Community
-  difficulty: QuestDifficulty;
-  rewardAmount: number;
+  category: string;
   rewardAsset: string;
-  xpReward: number;
-  status: QuestStatus;
-  deadline?: string;
-  requirements?: string[];
-  maxParticipants?: number;
-  currentParticipants?: number;
+  rewardAmount: string | number;
+  status: QuestStatus | ApiQuestStatus;
   createdAt: string;
   updatedAt: string;
 }

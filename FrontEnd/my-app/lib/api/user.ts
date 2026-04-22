@@ -29,6 +29,11 @@ import type {
   PaginationParams,
 } from "@/lib/types/api.types";
 
+import type {
+  QuestResponse,
+  SubmissionResponse,
+} from "@/lib/types/api.types";
+
 // Re-export legacy dashboard types for backward compat
 export type {
   UserStats,
@@ -39,85 +44,127 @@ export type {
   DashboardData,
 } from "../types/dashboard";
 import type {
-  UserStats,
-  Quest,
-  Submission,
   EarningsData,
   Badge,
-  DashboardData,
 } from "../types/dashboard";
 
 const dashboardDelay = (ms: number) =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
-const mockUserStats: UserStats = {
+const mockUserStats: UserStatsResponse = {
   xp: 2840,
   level: 12,
-  totalEarnings: 2450,
+  totalEarned: "2450",
   questsCompleted: 42,
-  currentStreak: 6,
+  failedQuests: 2,
+  successRate: 95.4,
+  badges: ["badge-1", "badge-2"],
 };
 
-const mockActiveQuests: Quest[] = [
+const mockActiveQuests: QuestResponse[] = [
   {
     id: "active-1",
+    contractQuestId: "1",
     title: "Smart Contract Security Review",
     description:
       "Audit reward distribution contract flow and document findings.",
-    reward: 250,
+    rewardAsset: "XLM",
+    rewardAmount: "250",
     deadline: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(),
-    progress: 72,
-    status: "active",
+    status: "Active",
     category: "Blockchain",
+    totalClaims: 10,
+    totalSubmissions: 5,
+    approvedSubmissions: 3,
+    rejectedSubmissions: 1,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    verifierAddress: "G...",
   },
   {
     id: "active-2",
+    contractQuestId: "2",
     title: "Documentation Update",
     description: "Refresh contributor docs and integration notes.",
-    reward: 75,
+    rewardAsset: "XLM",
+    rewardAmount: "75",
     deadline: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString(),
-    progress: 34,
-    status: "active",
+    status: "Active",
     category: "Documentation",
+    totalClaims: 5,
+    totalSubmissions: 2,
+    approvedSubmissions: 2,
+    rejectedSubmissions: 0,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    verifierAddress: "G...",
   },
   {
     id: "active-3",
+    contractQuestId: "3",
     title: "UI Component Library",
     description: "Extend reusable quest card and moderation components.",
-    reward: 150,
+    rewardAsset: "XLM",
+    rewardAmount: "150",
     deadline: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-    progress: 58,
-    status: "active",
+    status: "Active",
     category: "Development",
+    totalClaims: 8,
+    totalSubmissions: 4,
+    approvedSubmissions: 2,
+    rejectedSubmissions: 1,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    verifierAddress: "G...",
   },
 ];
 
-const mockRecentSubmissions: Submission[] = [
+const mockRecentSubmissions: SubmissionResponse[] = [
   {
     id: "submission-1",
     questId: "active-1",
-    questTitle: "Smart Contract Security Review",
-    submittedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-    status: "approved",
-    reward: 250,
-    feedback: "Approved after final validation pass.",
+    userId: "user-1",
+    status: "Approved",
+    proof: { type: "link", value: "https://github.com/..." },
+    createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+    updatedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+    quest: {
+      id: "active-1",
+      title: "Smart Contract Security Review",
+      rewardAmount: "250",
+      rewardAsset: "XLM",
+    },
   },
   {
     id: "submission-2",
     questId: "active-2",
-    questTitle: "Documentation Update",
-    submittedAt: new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString(),
-    status: "pending",
-    reward: 75,
+    userId: "user-1",
+    status: "Pending",
+    proof: { type: "link", value: "https://github.com/..." },
+    createdAt: new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString(),
+    updatedAt: new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString(),
+    quest: {
+      id: "active-2",
+      title: "Documentation Update",
+      rewardAmount: "75",
+      rewardAsset: "XLM",
+    },
   },
   {
     id: "submission-3",
     questId: "archive-1",
-    questTitle: "API Error Handling Improvements",
-    submittedAt: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString(),
-    status: "rejected",
-    reward: 125,
-    feedback: "Missing required test coverage.",
+    userId: "user-1",
+    status: "Rejected",
+    proof: { type: "link", value: "https://github.com/..." },
+    rejectionReason: "Missing required test coverage.",
+    createdAt: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString(),
+    updatedAt: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString(),
+    quest: {
+      id: "archive-1",
+      title: "API Error Handling Improvements",
+      rewardAmount: "125",
+      rewardAsset: "XLM",
+    },
   },
 ];
 
@@ -253,12 +300,12 @@ export async function deleteAccount(address: string): Promise<void> {
 // Legacy dashboard helpers (backward compatibility for existing UI)
 // ---------------------------------------------------------------------------
 
-export async function fetchActiveQuests(): Promise<Quest[]> {
+export async function fetchActiveQuests(): Promise<QuestResponse[]> {
   await dashboardDelay(250);
   return [...mockActiveQuests];
 }
 
-export async function fetchRecentSubmissions(): Promise<Submission[]> {
+export async function fetchRecentSubmissions(): Promise<SubmissionResponse[]> {
   await dashboardDelay(250);
   return [...mockRecentSubmissions];
 }
