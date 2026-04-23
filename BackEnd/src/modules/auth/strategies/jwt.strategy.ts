@@ -12,21 +12,21 @@ export interface JwtPayload {
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
-  constructor(
-    private readonly configService: ConfigService,
-    private readonly authService: AuthService,
-  ) {
-    const secret = configService.get<string>('JWT_SECRET');
-    if (!secret) {
-      throw new Error('JWT_SECRET is not defined in environment variables');
-    }
+   constructor(
+     private readonly configService: ConfigService,
+     private readonly authService: AuthService,
+   ) {
+     const publicKey = configService.get<string>('JWT_PUBLIC_KEY');
+     if (!publicKey) {
+       throw new Error('JWT_PUBLIC_KEY is not defined in environment variables');
+     }
 
-    super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
-      ignoreExpiration: false,
-      secretOrKey: secret,
-    });
-  }
+     super({
+       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+       ignoreExpiration: false,
+       secretOrKey: publicKey,
+     });
+   }
 
   async validate(payload: JwtPayload): Promise<AuthUser> {
     return this.authService.validateUser(payload.stellarAddress);

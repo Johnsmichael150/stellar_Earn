@@ -24,17 +24,17 @@ export class WsAuthGuard implements CanActivate {
     return this.validateClient(client);
   }
 
-  async validateClient(client: Socket): Promise<boolean> {
-    try {
-      const token = this.extractToken(client);
-      if (!token) {
-        throw new WsException('Missing authentication token');
-      }
+   async validateClient(client: Socket): Promise<boolean> {
+     try {
+       const token = this.extractToken(client);
+       if (!token) {
+         throw new WsException('Missing authentication token');
+       }
 
-      const secret = this.configService.get<string>('JWT_SECRET');
-      const payload = await this.jwtService.verifyAsync<WsAuthPayload>(token, {
-        secret,
-      });
+       const publicKey = this.configService.get<string>('JWT_PUBLIC_KEY');
+       const payload = await this.jwtService.verifyAsync<WsAuthPayload>(token, {
+         publicKey,
+       });
 
       client.data.user = {
         id: payload.sub,

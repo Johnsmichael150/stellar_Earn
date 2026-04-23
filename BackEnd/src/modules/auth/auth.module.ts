@@ -11,25 +11,26 @@ import { RefreshToken } from './entities/refresh-token.entity';
 @Module({
   imports: [
     PassportModule,
-    JwtModule.registerAsync({
-      imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => {
-        const secret = configService.get<string>('JWT_SECRET');
-        if (!secret) {
-          throw new Error('JWT_SECRET is not defined in environment variables');
-        }
-        return {
-          secret,
-          signOptions: {
-            expiresIn: configService.get<string>(
-              'JWT_ACCESS_TOKEN_EXPIRATION',
-              '15m',
-            ),
-          },
-        } as any;
-      },
-      inject: [ConfigService],
-    }),
+     JwtModule.registerAsync({
+       imports: [ConfigModule],
+       useFactory: async (configService: ConfigService) => {
+         const privateKey = configService.get<string>('JWT_PRIVATE_KEY');
+         if (!privateKey) {
+           throw new Error('JWT_PRIVATE_KEY is not defined in environment variables');
+         }
+         return {
+           privateKey,
+           signOptions: {
+             expiresIn: configService.get<string>(
+               'JWT_ACCESS_TOKEN_EXPIRATION',
+               '15m',
+             ),
+             algorithm: 'RS256',
+           },
+         } as any;
+       },
+       inject: [ConfigService],
+     }),
     TypeOrmModule.forFeature([RefreshToken]),
   ],
   controllers: [AuthController],

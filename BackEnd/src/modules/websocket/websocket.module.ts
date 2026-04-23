@@ -12,17 +12,22 @@ import { WebsocketEventHandler } from '../../events/handlers/websocket-event.han
 @Module({
   imports: [
     TypeOrmModule.forFeature([WsSubscription, WsMessage]),
-    JwtModule.registerAsync({
-      imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => {
-        const secret = configService.get<string>('JWT_SECRET');
-        if (!secret) {
-          throw new Error('JWT_SECRET is not defined in environment variables');
-        }
-        return { secret };
-      },
-      inject: [ConfigService],
-    }),
+     JwtModule.registerAsync({
+       imports: [ConfigModule],
+       useFactory: async (configService: ConfigService) => {
+         const privateKey = configService.get<string>('JWT_PRIVATE_KEY');
+         if (!privateKey) {
+           throw new Error('JWT_PRIVATE_KEY is not defined in environment variables');
+         }
+         return {
+           privateKey,
+           signOptions: {
+             algorithm: 'RS256',
+           },
+         };
+       },
+       inject: [ConfigService],
+     }),
   ],
   providers: [
     AppWebsocketGateway,
