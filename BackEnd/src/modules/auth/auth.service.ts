@@ -2,11 +2,13 @@ import {
   Injectable,
   UnauthorizedException,
   NotFoundException,
+  Res,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { Response } from 'express';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { UsersService } from '../users/user.service';
 import { User } from '../users/entities/user.entity';
@@ -30,6 +32,15 @@ export interface AuthUser {
   stellarAddress: string | null;
   role: Role;
 }
+
+export interface TokenResponse {
+  accessToken: string;
+  refreshToken: string;
+  expiresIn: number;
+}
+
+const ACCESS_TOKEN_COOKIE = 'auth_token';
+const REFRESH_TOKEN_COOKIE = 'refresh_token';
 
 export interface OAuthUserProfile {
   googleId?: string;
@@ -97,6 +108,14 @@ export class AuthService {
       ...tokens,
       user: this.mapToUserResponse(stellarAddress, role),
     };
+}
+
+  private clearAuthCookies(response: Response): void {
+    const configService = this.configService;
+    const domain = configService.get<string>('COOKIE_DOMAIN');
+
+    response.clearCookie(ACCESS_TOKEN_COOKIE, { path: '/' });
+    response.clearCookie(REFRESH_TOKEN_COOKIE, { path: '/' });
   }
 
   async loginOAuthUser(profile: OAuthUserProfile): Promise<TokenResponseDto> {
