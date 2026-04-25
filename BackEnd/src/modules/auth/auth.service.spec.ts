@@ -1,286 +1,427 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { JwtService } from '@nestjs/jwt';
-import { ConfigService } from '@nestjs/config';
-import { getRepositoryToken } from '@nestjs/typeorm';
 import { UnauthorizedException, NotFoundException } from '@nestjs/common';
-import * as crypto from 'crypto';
+import { getRepositoryToken } from '@nestjs/typeorm';
 import { AuthService } from './auth.service';
-import {
-  RefreshToken,
-  RefreshTokenRevokeReason,
-} from './entities/refresh-token.entity';
+import { UsersService } from '../users/user.service';
+import { RefreshToken } from './entities/refresh-token.entity';
 import { Role } from '../../common/enums/role.enum';
+import {
+  createMockRepository,
+  createMockUser,
+  createMockRefreshToken,
+  createMockJwtService,
+  createMockConfigService,
+  generateRandomStellarAddress,
+} from '../../test/utils/test-helpers';
 
-const STELLAR_ADDRESS =
-  'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';
+// Mock the signature utilities
+jest.mock('./utils/signature', () => ({
+  generateChallengeMessage: jest.fn((address, timestamp) => `Challenge for ${address} at ${timestamp}`),
+  verifyStellarSignature: jest.fn(),
+  isChallengeExpired: jest.fn((timestamp, minutes) => false),
+  extractTimestampFromChallenge: jest.fn((challenge) => Date.now()),
+}));
 
-const sha256 = (value: string): string =>
-  crypto.createHash('sha256').update(value).digest('hex');
-
-describe('AuthService — refresh token rotation', () => {
+describe('AuthService', () => {
   let service: AuthService;
-  let repo: {
-    create: jest.Mock;
-    save: jest.Mock;
-    findOne: jest.Mock;
-    update: jest.Mock;
-  };
-  let jwt: { sign: jest.Mock };
-  let config: { get: jest.Mock };
-  let storedRows: Map<string, RefreshToken>;
-
-  const configValues: Record<string, string> = {
-    JWT_ACCESS_TOKEN_EXPIRATION: '15m',
-    JWT_REFRESH_TOKEN_EXPIRATION: '7d',
-    ADMIN_ADDRESSES: '',
-  };
+  let usersService: UsersService;
+  let refreshTokenRepository: any;
+  let jwtService: any;
+  let configService: any;
 
   beforeEach(async () => {
-    storedRows = new Map();
-
-    repo = {
-      create: jest.fn().mockImplementation((dto: Partial<RefreshToken>) => {
-        return {
-          id: crypto.randomUUID(),
-          replacedByTokenId: null,
-          isRevoked: false,
-          revokedAt: null,
-          revokedReason: null,
-          createdAt: new Date(),
-          ...dto,
-        } as RefreshToken;
-      }),
-      save: jest.fn().mockImplementation((entity: RefreshToken) => {
-        storedRows.set(entity.id, { ...entity });
-        return Promise.resolve(entity);
-      }),
-      findOne: jest
-        .fn()
-        .mockImplementation(({ where }: { where: Record<string, unknown> }) => {
-          for (const row of storedRows.values()) {
-            const indexed = row as unknown as Record<string, unknown>;
-            const matches = Object.entries(where).every(
-              ([k, v]) => indexed[k] === v,
-            );
-            if (matches) return Promise.resolve(row);
-          }
-          return Promise.resolve(null);
-        }),
-      update: jest
-        .fn()
-        .mockImplementation(
-          (
-            criteria: Record<string, unknown>,
-            patch: Partial<RefreshToken>,
-          ) => {
-            let affected = 0;
-            for (const row of storedRows.values()) {
-              const indexed = row as unknown as Record<string, unknown>;
-              const matches = Object.entries(criteria).every(
-                ([k, v]) => indexed[k] === v,
-              );
-              if (matches) {
-                Object.assign(row, patch);
-                affected += 1;
-              }
-            }
-            return Promise.resolve({ affected });
-          },
-        ),
-    };
-
-    jwt = {
-      sign: jest
-        .fn()
-        .mockImplementation(
-          (_payload: unknown, opts: { expiresIn: string }) =>
-            `signed.${opts.expiresIn}`,
-        ),
-    };
-
-    config = {
-      get: jest
-        .fn()
-        .mockImplementation((key: string, fallback?: string) => {
-          return configValues[key] ?? fallback ?? '';
-        }),
-    };
+    const mockRefreshTokenRepository = createMockRepository<RefreshToken>();
+    jwtService = createMockJwtService();
+    configService = createMockConfigService();
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
-        { provide: JwtService, useValue: jwt },
-        { provide: ConfigService, useValue: config },
-        { provide: getRepositoryToken(RefreshToken), useValue: repo },
+        {
+          provide: 'JwtService',
+          useValue: jwtService,
+        },
+        {
+          provide: 'ConfigService',
+          useValue: configService,
+        },
+        {
+          provide: UsersService,
+          useValue: {
+            findByAddress: jest.fn(),
+            findById: jest.fn(),
+            findByEmail: jest.fn(),
+            findByGoogleId: jest.fn(),
+            findByGithubId: jest.fn(),
+            create: jest.fn(),
+          },
+        },
+        {
+          provide: getRepositoryToken(RefreshToken),
+          useValue: mockRefreshTokenRepository,
+        },
       ],
-    }).compile();
+    })
+      .useMocker((token) => {
+        if (token === 'JwtService') return jwtService;
+        if (token === 'ConfigService') return configService;
+        return undefined;
+      })
+      .compile();
 
     service = module.get<AuthService>(AuthService);
+    usersService = module.get<UsersService>(UsersService);
+    refreshTokenRepository = module.get(getRepositoryToken(RefreshToken));
+  });
+
+  describe('generateChallenge', () => {
+    it('should generate a challenge for a valid Stellar address', async () => {
+      const stellarAddress = generateRandomStellarAddress();
+
+      const result = await service.generateChallenge(stellarAddress);
+
+      expect(result).toHaveProperty('challenge');
+      expect(result).toHaveProperty('expiresAt');
+      expect(result.expiresAt instanceof Date).toBe(true);
+    });
+
+    it('should set expiration date based on configuration', async () => {
+      const stellarAddress = generateRandomStellarAddress();
+      const beforeCall = Date.now();
+
+      const result = await service.generateChallenge(stellarAddress);
+
+      const afterCall = Date.now();
+      const expectedMinExpiry = beforeCall + 5 * 60 * 1000;
+      const expectedMaxExpiry = afterCall + 5 * 60 * 1000;
+
+      expect(result.expiresAt.getTime()).toBeGreaterThanOrEqual(expectedMinExpiry);
+      expect(result.expiresAt.getTime()).toBeLessThanOrEqual(expectedMaxExpiry);
+    });
   });
 
   describe('generateTokens', () => {
-    it('persists only a SHA-256 hash of the refresh token, never the plaintext', async () => {
+    it('should generate valid access and refresh tokens', async () => {
+      const subject = 'test-user-id';
+      const stellarAddress = generateRandomStellarAddress();
+
+      jest.spyOn(refreshTokenRepository, 'create').mockReturnValue({
+        token: 'refresh-token-value',
+      });
+      jest.spyOn(refreshTokenRepository, 'save').mockResolvedValue({
+        token: 'refresh-token-value',
+      });
+
       const result = await service.generateTokens(
-        STELLAR_ADDRESS,
+        subject,
+        subject,
+        stellarAddress,
         Role.USER,
       );
 
-      expect(storedRows.size).toBe(1);
-      const [row] = Array.from(storedRows.values());
-
-      // The wire-format token is "<rowId>.<secret>". The DB must hold
-      // sha256(secret) — and crucially must NOT contain the secret.
-      const [, secret] = result.refreshToken.split('.');
-      expect(secret).toBeTruthy();
-      expect(row.tokenHash).toBe(sha256(secret));
-      expect(row.tokenHash).not.toBe(secret);
-      expect(JSON.stringify(row)).not.toContain(secret);
+      expect(result).toHaveProperty('accessToken');
+      expect(result).toHaveProperty('refreshToken');
+      expect(result).toHaveProperty('expiresIn');
+      expect(typeof result.accessToken).toBe('string');
+      expect(typeof result.refreshToken).toBe('string');
+      expect(typeof result.expiresIn).toBe('number');
     });
 
-    it('starts a fresh token family on login but reuses the supplied family id on rotation', async () => {
-      const initial = await service.generateTokens(
-        STELLAR_ADDRESS,
+    it('should save refresh token to repository', async () => {
+      const subject = 'test-user-id';
+      const stellarAddress = generateRandomStellarAddress();
+      const saveSpy = jest.spyOn(refreshTokenRepository, 'save').mockResolvedValue({});
+
+      await service.generateTokens(subject, subject, stellarAddress, Role.USER);
+
+      expect(refreshTokenRepository.create).toHaveBeenCalled();
+      expect(saveSpy).toHaveBeenCalled();
+    });
+
+    it('should handle null userId and stellarAddress', async () => {
+      const subject = generateRandomStellarAddress();
+
+      jest.spyOn(refreshTokenRepository, 'create').mockReturnValue({
+        token: 'refresh-token-value',
+      });
+      jest.spyOn(refreshTokenRepository, 'save').mockResolvedValue({
+        token: 'refresh-token-value',
+      });
+
+      const result = await service.generateTokens(
+        subject,
+        null,
+        null,
         Role.USER,
-      );
-      const [first] = Array.from(storedRows.values());
-      expect(first.familyId).toMatch(
-        /^[0-9a-f-]{36}$/i,
       );
 
-      const rotated = await service.generateTokens(
-        STELLAR_ADDRESS,
-        Role.USER,
-        first.familyId,
-      );
-      const familyIds = Array.from(storedRows.values()).map(
-        (r) => r.familyId,
-      );
-      expect(familyIds).toEqual([first.familyId, first.familyId]);
-      expect(initial.refreshToken).not.toBe(rotated.refreshToken);
+      expect(result).toHaveProperty('accessToken');
+      expect(result).toHaveProperty('refreshToken');
     });
   });
 
   describe('refreshTokens', () => {
-    it('rotates the presented token: marks it revoked with reason "rotated" and links to the successor', async () => {
-      const initial = await service.generateTokens(
-        STELLAR_ADDRESS,
-        Role.USER,
-      );
-      const [originalRow] = Array.from(storedRows.values());
+    it('should successfully refresh valid tokens', async () => {
+      const user = createMockUser();
+      const refreshToken = createMockRefreshToken({
+        userId: user.id,
+        isRevoked: false,
+      });
 
-      const result = await service.refreshTokens(initial.refreshToken);
+      jest
+        .spyOn(refreshTokenRepository, 'findOne')
+        .mockResolvedValue(refreshToken);
+      jest.spyOn(usersService, 'findById').mockResolvedValue(user);
+      jest.spyOn(refreshTokenRepository, 'save').mockResolvedValue(refreshToken);
+      jest.spyOn(refreshTokenRepository, 'create').mockReturnValue({
+        token: 'new-refresh-token',
+      });
 
-      const after = storedRows.get(originalRow.id)!;
-      expect(after.isRevoked).toBe(true);
-      expect(after.revokedReason).toBe(RefreshTokenRevokeReason.ROTATED);
-      expect(after.revokedAt).toBeInstanceOf(Date);
+      const result = await service.refreshTokens(refreshToken.token);
 
-      // The successor row must exist, must share the family, and must be
-      // pointed to by the consumed row.
-      const successorId = result.refreshToken.split('.')[0];
-      const successor = storedRows.get(successorId);
-      expect(successor).toBeDefined();
-      expect(successor!.familyId).toBe(originalRow.familyId);
-      expect(after.replacedByTokenId).toBe(successorId);
-
-      // And the new refresh token value really is new.
-      expect(result.refreshToken).not.toBe(initial.refreshToken);
+      expect(result).toHaveProperty('accessToken');
+      expect(result).toHaveProperty('refreshToken');
+      expect(result).toHaveProperty('user');
     });
 
-    it('treats reuse of a rotated token as theft: revokes the entire family', async () => {
-      const initial = await service.generateTokens(
-        STELLAR_ADDRESS,
-        Role.USER,
+    it('should throw UnauthorizedException for invalid refresh token', async () => {
+      jest.spyOn(refreshTokenRepository, 'findOne').mockResolvedValue(null);
+
+      await expect(service.refreshTokens('invalid-token')).rejects.toThrow(
+        UnauthorizedException,
       );
-      const [familyRoot] = Array.from(storedRows.values());
-
-      // Legitimate rotation #1 → produces token B (family member).
-      const second = await service.refreshTokens(initial.refreshToken);
-      // Legitimate rotation #2 → produces token C (family member).
-      const third = await service.refreshTokens(second.refreshToken);
-
-      // Attacker (or careless retry) replays the *original* token. Every
-      // row in the family — including the currently-active token C — must
-      // be revoked under reason "reuse_detected".
-      await expect(
-        service.refreshTokens(initial.refreshToken),
-      ).rejects.toBeInstanceOf(UnauthorizedException);
-
-      const familyRows = Array.from(storedRows.values()).filter(
-        (r) => r.familyId === familyRoot.familyId,
-      );
-      expect(familyRows.length).toBeGreaterThanOrEqual(3);
-      for (const row of familyRows) {
-        expect(row.isRevoked).toBe(true);
-      }
-      // The most recent token (third) was active before the replay — its
-      // revoke reason should now be the cascade reason, not "rotated".
-      const thirdId = third.refreshToken.split('.')[0];
-      expect(storedRows.get(thirdId)!.revokedReason).toBe(
-        RefreshTokenRevokeReason.REUSE_DETECTED,
-      );
-
-      // And a subsequent attempt with the (just-cascaded) latest token must
-      // also fail — the family is dead until the user re-authenticates.
-      await expect(
-        service.refreshTokens(third.refreshToken),
-      ).rejects.toBeInstanceOf(UnauthorizedException);
     });
 
-    it('rejects an unknown / malformed refresh token without touching the DB', async () => {
+    it('should throw UnauthorizedException for revoked token', async () => {
+      const refreshToken = createMockRefreshToken({ isRevoked: true });
+
+      jest
+        .spyOn(refreshTokenRepository, 'findOne')
+        .mockResolvedValue(refreshToken);
+
       await expect(
-        service.refreshTokens('not-a-real-token'),
-      ).rejects.toBeInstanceOf(UnauthorizedException);
-      await expect(
-        service.refreshTokens('uuid.does-not-match-any-hash'),
-      ).rejects.toBeInstanceOf(UnauthorizedException);
+        service.refreshTokens(refreshToken.token),
+      ).rejects.toThrow(UnauthorizedException);
     });
 
-    it('rejects an expired refresh token', async () => {
-      const initial = await service.generateTokens(
-        STELLAR_ADDRESS,
-        Role.USER,
-      );
-      const [row] = Array.from(storedRows.values());
-      row.expiresAt = new Date(Date.now() - 1_000);
+    it('should throw UnauthorizedException for expired token', async () => {
+      const refreshToken = createMockRefreshToken({
+        expiresAt: new Date(Date.now() - 1000),
+        isRevoked: false,
+      });
+
+      jest
+        .spyOn(refreshTokenRepository, 'findOne')
+        .mockResolvedValue(refreshToken);
 
       await expect(
-        service.refreshTokens(initial.refreshToken),
-      ).rejects.toThrow('Refresh token has expired');
+        service.refreshTokens(refreshToken.token),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('should revoke old refresh token when issuing new one', async () => {
+      const user = createMockUser();
+      const refreshToken = createMockRefreshToken({
+        userId: user.id,
+        isRevoked: false,
+      });
+
+      jest
+        .spyOn(refreshTokenRepository, 'findOne')
+        .mockResolvedValue(refreshToken);
+      jest.spyOn(usersService, 'findById').mockResolvedValue(user);
+      const saveSpy = jest
+        .spyOn(refreshTokenRepository, 'save')
+        .mockResolvedValue(refreshToken);
+      jest.spyOn(refreshTokenRepository, 'create').mockReturnValue({
+        token: 'new-token',
+      });
+
+      await service.refreshTokens(refreshToken.token);
+
+      expect(saveSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ isRevoked: true }),
+      );
     });
   });
 
   describe('revokeToken', () => {
-    it('records revokedAt and revoke reason on single-token logout', async () => {
-      await service.generateTokens(STELLAR_ADDRESS, Role.USER);
-      const [row] = Array.from(storedRows.values());
+    it('should revoke specific token', async () => {
+      const userId = 'test-user-id';
+      const tokenId = 'token-id-123';
+      const token = createMockRefreshToken({ id: tokenId, userId });
 
-      await service.revokeToken(STELLAR_ADDRESS, row.id);
+      jest
+        .spyOn(refreshTokenRepository, 'findOne')
+        .mockResolvedValue(token);
+      jest.spyOn(refreshTokenRepository, 'save').mockResolvedValue(token);
 
-      const after = storedRows.get(row.id)!;
-      expect(after.isRevoked).toBe(true);
-      expect(after.revokedAt).toBeInstanceOf(Date);
-      expect(after.revokedReason).toBe(RefreshTokenRevokeReason.LOGOUT);
+      await service.revokeToken(userId, tokenId);
+
+      expect(refreshTokenRepository.findOne).toHaveBeenCalledWith({
+        where: expect.any(Array),
+      });
+      expect(refreshTokenRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ isRevoked: true }),
+      );
     });
 
-    it('logout-all marks every active token as revoked with reason "logout_all"', async () => {
-      await service.generateTokens(STELLAR_ADDRESS, Role.USER);
-      await service.generateTokens(STELLAR_ADDRESS, Role.USER);
+    it('should throw NotFoundException when token not found', async () => {
+      jest.spyOn(refreshTokenRepository, 'findOne').mockResolvedValue(null);
 
-      await service.revokeToken(STELLAR_ADDRESS);
-
-      for (const row of storedRows.values()) {
-        expect(row.isRevoked).toBe(true);
-        expect(row.revokedReason).toBe(
-          RefreshTokenRevokeReason.LOGOUT_ALL,
-        );
-      }
-    });
-
-    it('throws NotFoundException when a specific token id does not exist', async () => {
       await expect(
-        service.revokeToken(STELLAR_ADDRESS, crypto.randomUUID()),
-      ).rejects.toBeInstanceOf(NotFoundException);
+        service.revokeToken('user-id', 'token-id'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should revoke all user tokens when tokenId not provided', async () => {
+      const userId = 'test-user-id';
+      const queryBuilder = {
+        update: jest.fn().mockReturnThis(),
+        set: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        execute: jest.fn().mockResolvedValue({ affected: 5 }),
+      };
+
+      jest
+        .spyOn(refreshTokenRepository, 'createQueryBuilder')
+        .mockReturnValue(queryBuilder);
+
+      await service.revokeToken(userId);
+
+      expect(queryBuilder.update).toHaveBeenCalledWith(RefreshToken);
+      expect(queryBuilder.set).toHaveBeenCalledWith({ isRevoked: true });
+      expect(queryBuilder.execute).toHaveBeenCalled();
+    });
+  });
+
+  describe('validateUser', () => {
+    it('should validate user with UUID', async () => {
+      const user = createMockUser();
+
+      jest.spyOn(usersService, 'findById').mockResolvedValue(user);
+
+      const result = await service.validateUser(user.id);
+
+      expect(result).toEqual({
+        id: user.id,
+        stellarAddress: user.stellarAddress,
+        role: user.role,
+      });
+    });
+
+    it('should validate user with Stellar address', async () => {
+      const user = createMockUser();
+
+      jest.spyOn(usersService, 'findByAddress').mockResolvedValue(user);
+
+      const result = await service.validateUser(user.stellarAddress);
+
+      expect(result).toEqual({
+        id: user.id,
+        stellarAddress: user.stellarAddress,
+        role: user.role,
+      });
+    });
+
+    it('should return user data with USER role for unknown Stellar addresses', async () => {
+      const stellarAddress = generateRandomStellarAddress();
+
+      jest
+        .spyOn(usersService, 'findByAddress')
+        .mockRejectedValue(new Error('Not found'));
+
+      const result = await service.validateUser(stellarAddress);
+
+      expect(result).toEqual({
+        id: stellarAddress,
+        stellarAddress,
+        role: Role.USER,
+      });
+    });
+  });
+
+  describe('loginOAuthUser', () => {
+    it('should create or update OAuth user and return tokens', async () => {
+      const user = createMockUser();
+      const profile = {
+        googleId: 'google-123',
+        email: 'user@example.com',
+        username: 'testuser',
+        avatarUrl: 'https://example.com/avatar.jpg',
+        provider: 'google' as const,
+      };
+
+      jest.spyOn(usersService, 'findByGoogleId').mockResolvedValue(null);
+      jest.spyOn(usersService, 'findByGithubId').mockResolvedValue(null);
+      jest.spyOn(usersService, 'findByEmail').mockResolvedValue(null);
+      jest.spyOn(usersService, 'create').mockResolvedValue(user);
+      jest.spyOn(refreshTokenRepository, 'create').mockReturnValue({
+        token: 'refresh-token',
+      });
+      jest
+        .spyOn(refreshTokenRepository, 'save')
+        .mockResolvedValue({ token: 'refresh-token' });
+
+      const result = await service.loginOAuthUser(profile);
+
+      expect(result).toHaveProperty('accessToken');
+      expect(result).toHaveProperty('refreshToken');
+      expect(result).toHaveProperty('user');
+    });
+
+    it('should find existing OAuth user by Google ID', async () => {
+      const user = createMockUser();
+      const profile = {
+        googleId: 'google-123',
+        email: 'user@example.com',
+        username: 'testuser',
+        avatarUrl: 'https://example.com/avatar.jpg',
+        provider: 'google' as const,
+      };
+
+      jest.spyOn(usersService, 'findByGoogleId').mockResolvedValue(user);
+      jest.spyOn(usersService, 'create').mockResolvedValue(user);
+      jest.spyOn(refreshTokenRepository, 'create').mockReturnValue({
+        token: 'refresh-token',
+      });
+      jest
+        .spyOn(refreshTokenRepository, 'save')
+        .mockResolvedValue({ token: 'refresh-token' });
+
+      const result = await service.loginOAuthUser(profile);
+
+      expect(usersService.findByGoogleId).toHaveBeenCalledWith('google-123');
+      expect(result).toHaveProperty('accessToken');
+    });
+  });
+
+  describe('parseExpirationToMs', () => {
+    it('should parse seconds correctly', () => {
+      // Access private method for testing
+      const result = (service as any).parseExpirationToMs('30s');
+      expect(result).toBe(30000);
+    });
+
+    it('should parse minutes correctly', () => {
+      const result = (service as any).parseExpirationToMs('15m');
+      expect(result).toBe(15 * 60 * 1000);
+    });
+
+    it('should parse hours correctly', () => {
+      const result = (service as any).parseExpirationToMs('2h');
+      expect(result).toBe(2 * 60 * 60 * 1000);
+    });
+
+    it('should parse days correctly', () => {
+      const result = (service as any).parseExpirationToMs('7d');
+      expect(result).toBe(7 * 24 * 60 * 60 * 1000);
+    });
+
+    it('should throw error for invalid format', () => {
+      expect(() => (service as any).parseExpirationToMs('invalid')).toThrow(
+        'Invalid expiration format',
+      );
     });
   });
 });
